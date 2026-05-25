@@ -57,10 +57,10 @@
 #define __PIN_US_ECHO        16
 
 // ===================== MOSFET OUTPUTS ===================
-#define __PIN_MOSFET_1       42
-#define __PIN_MOSFET_2       41
-#define __PIN_MOSFET_3       40
-#define __PIN_MOSFET_4       39
+#define __PIN_MOSFET_1       38
+#define __PIN_MOSFET_2       45
+#define __PIN_MOSFET_3       47
+#define __PIN_MOSFET_4       21
 
 // ===================== RELAY OUTPUTS ====================
 #define __PIN_RELAY_1        42
@@ -79,8 +79,8 @@
 #define __PIN_LEFT_STP       TBA
 
 // ===================== EXTRA OUTPUTS ====================
-#define __PIN_LED_STRIP      17
-#define __PIN_SERVO          18
+#define __PIN_LED_STRIP      3
+#define __PIN_SERVO          1
 
 // ===================== UART (JETSON BACKUP) =============
 #define __PIN_UART_TX        TBA
@@ -101,7 +101,7 @@ char CDC_RX_BUFFER[128];
 char JSON_TX_BUFFER[512];
 uint8_t CDC_RX_INDEX;
 
-char EXT_LCD_BUF[20];
+char EXT_LCD_BUF[40];
 uint16_t ESP_HEAP;
 bool TM_SWITCH;
 
@@ -184,11 +184,20 @@ struct STRUCT_THRESHOLDS {
 };
 
 STRUCT_THRESHOLDS _TS;
+
+uint8_t TARGET_BRIGHTNESS = 0;
+uint8_t TARGET_RATIO = 127;
+
+uint8_t EXT_STATUS = 0;
+// 0 = STARTUP GREEN; 1 = STBY BLUE; 2 = IDLE ORANGE; 3 = ERR RED; 
+
+uint8_t STA_GLOBAL_BRIGHTNESS = 50;
 /* USER CODE END Variables */
 
 /* USER CODE BEGIN Constructors */
 SemaphoreHandle_t xMutex;
 Adafruit_NeoPixel OBJ_ESP_LED(__NUM_ESP_LED, __PIN_ESP_LED, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel OBJ_STA_LED(__NUM_STATUS_LED, __PIN_LED_STRIP, NEO_GRB + NEO_KHZ800);
 LiquidCrystal_I2C OBJ_PRI_LCD(__ADDR_PRI_LCD, 20, 4);
 OneWire ow(__PIN_DS18B20);
 DallasTemperature OBJ_SNS_TMP(&ow);
@@ -263,9 +272,14 @@ void RTOS_EXT_LCD(void *pv) {
   OBJ_PRI_LCD.setCursor(1, 2);
   OBJ_PRI_LCD.print("Waiting for Jetson");
 
+  ESP_STATUS = 1;
+
   while (!CDC_JETSON_ACK) {
     FN_LCD_DOTS(8, 3, 3, 100);
   }
+
+  ESP_STATUS = 0;
+  EXT_STATUS = 1;
   OBJ_PRI_LCD.clear();
   OBJ_PRI_LCD.setCursor(3, 1);
   OBJ_PRI_LCD.print("Jetson Booted!");
@@ -298,9 +312,9 @@ void RTOS_EXT_LCD(void *pv) {
         if (TM_SWITCH) {
           // Lux on 2,0
           OBJ_PRI_LCD.setCursor(4, 2);
-          OBJ_PRI_LCD.print("               ");
+          OBJ_PRI_LCD.print("                ");
           OBJ_PRI_LCD.setCursor(4, 3);
-          OBJ_PRI_LCD.print("               ");
+          OBJ_PRI_LCD.print("                ");
 
           snprintf(EXT_LCD_BUF, sizeof(EXT_LCD_BUF), _ERR.ERR_TSL ? "ERR" : "LUX:%hu", _SN.SR_LUX);
           OBJ_PRI_LCD.setCursor(0, 2);
@@ -623,7 +637,7 @@ void RTOS_JSON_ENC(void *pv) {
     doc.clear();
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
-}
+} // TODO
 
 void RTOS_EXT_CHL(void *pv) {
   while (1) {
@@ -647,10 +661,63 @@ void RTOS_EXT_CHL(void *pv) {
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
-}
+} // TODO
 
 void RTOS_WIFI_CONN(void *pv) {
   WiFi.begin(ssid, pass);
+} // TODO
+
+void RTOS_EXT_LIGHT(void *pv) {
+
+}
+
+void RTOS_EXT_STATUS(void *pv) {
+  uint8_t bluep = 0;
+  while (1) {
+    uint8_t state;
+    
+    if (xSemaphoreTake(xMutex, portMAX_DELAY)) {
+      state = EXT_STATUS;
+      xSemaphoreGive(xMutex);
+    }
+
+    switch (state) { // 0 = STARTUP GREEN; 1 = STBY BLUE; 2 = IDLE ORANGE; 3 = ERR RED; 
+
+      case 0: {
+        for (int i = 0; i < 128; i++) {
+          OBJ_STA_LED.fill(col(i, i, 0));
+          OBJ_STA_LED.show();
+          vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        for (int i = 128; i > 0; i--) {
+          OBJ_STA_LED.fill(col(i, i, 0));
+          OBJ_STA_LED.show();
+          vTaskDelay(pdMS_TO_TICKS(1));
+        }
+
+        break;
+      }
+
+      case 1: {
+        for (; bluep < 255; bluep++) {
+          OBJ_STA_LED.fill(col(0, bluep, 0));
+          OBJ_STA_LED.show();
+          vTaskDelay(pdMS_TO_TICKS(1));
+        }
+        break;
+      }
+
+      case 2: {
+        break;
+      }
+
+      case 3: {
+        break;
+      }
+
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
 }
 
 /* USER CODE END 0 */
@@ -663,6 +730,9 @@ void setup() {
 
   OBJ_ESP_LED.begin();
   OBJ_ESP_LED.show();
+
+  OBJ_STA_LED.begin();
+  OBJ_STA_LED.show();
 
   OBJ_PRI_LCD.init();
   OBJ_PRI_LCD.backlight();
@@ -681,12 +751,20 @@ void setup() {
 
   pinMode(0, INPUT_PULLUP);
 
+  pinMode(__PIN_MOSFET_1, OUTPUT);
+  pinMode(__PIN_MOSFET_2, OUTPUT);
+  pinMode(__PIN_MOSFET_3, OUTPUT);
+  pinMode(__PIN_MOSFET_4, OUTPUT);
+
+
   /* USER CODE END Setup_Init */
 
   /* USER CODE BEGIN FreeRTOS_Init */
   xTaskCreatePinnedToCore(RTOS_ESP_STATUS, "STATUS_RGB", 2048, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(RTOS_EXT_LCD, "PRIMARY LCD", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(RTOS_EXT_CDC, "SERIAL", 4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(RTOS_EXT_STATUS, "EXT_STATUS", 4096, NULL, 2, NULL, 1);
+  // xTaskCreatePinnedToCore(RTOS_SET_LED, "LED_CTRL", 2048, NULL, 1, NULL, 0);
   
   while (!CDC_JETSON_ACK) {
     Serial.print(".");
@@ -720,6 +798,8 @@ void loop() {
         OBJ_PRI_LCD.clear();
         delay(100); // simple debounce
     }
+
+    // STA_GLOBAL_BRIGHTNESS = constrain(map(_SN.SR_LUX, 20, 200, 0, 100), 0, 100);
 
     lastButton = currentButton;
 
@@ -768,4 +848,15 @@ void t(void*) {
     }
 }
 
+uint8_t scale(uint8_t v) {
+  return (v * STA_GLOBAL_BRIGHTNESS) / 100;
+}
+
+uint32_t col(uint8_t r, uint8_t g, uint8_t b) {
+  return OBJ_STA_LED.Color(
+    scale(r),
+    scale(g),
+    scale(b)
+  );
+}
 /* USER CODE END 1 */
